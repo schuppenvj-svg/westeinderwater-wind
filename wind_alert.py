@@ -9,7 +9,7 @@ Rules
 - A second "wind is about to die" alert goes out ~1 h before the wind drops.
 Everything you may want to tweak is in the SETTINGS / TABLES sections.
 """
-import os, sys, json, math, time, random, urllib.request, urllib.parse
+import os, re, sys, json, math, time, random, urllib.request, urllib.parse, urllib.error
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -251,8 +251,9 @@ def fetch():
                 return json.load(r)
         except Exception as e:  # noqa
             err = e
+            print("Open-Meteo request failed (try %d/3): %s" % (i + 1, e))
             time.sleep(3 * (i + 1))
-    raise err
+    sys.exit("Could not get the forecast from Open-Meteo: %s" % err)
 
 
 def prepare(data):
@@ -440,14 +441,21 @@ def die_message(P, a, b, now):
 def push(title, message, priority=4, tags=None):
     if not TOPIC:
         sys.exit("NTFY_TOPIC is not set (GitHub repo > Settings > Secrets and variables > Actions).")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", TOPIC):
+        sys.exit("NTFY_TOPIC is invalid: use only letters, numbers, '-' and '_' (max 64 characters), "
+                 "no spaces/dots/@. Currently it is %d characters long." % len(TOPIC))
     msg = {"topic": TOPIC, "title": title, "message": message,
            "priority": priority, "tags": tags or ["ocean", "palm_tree"]}
     if PORTRAIT_URL:
         msg["icon"] = PORTRAIT_URL      # Android + web app sender icon
         msg["attach"] = PORTRAIT_URL    # iOS: shows as an image preview
     body = json.dumps(msg).encode()
-    req = urllib.request.Request("https://ntfy.sh", data=body, headers={"Content-Type": "application/json"})
-    urllib.request.urlopen(req, timeout=30).read()
+    req = urllib.request.Request("https://ntfy.sh/", data=body, headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=30).read()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:300]
+        sys.exit("ntfy.sh refused the notification: HTTP %s %s. Response: %s" % (e.code, e.reason, detail))
 
 
 def run(P, sun, now, state, send=push):
